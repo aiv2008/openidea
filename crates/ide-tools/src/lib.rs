@@ -86,6 +86,18 @@ pub struct ToolInfo {
     pub alternatives: Vec<String>,
 }
 
+// A toolchain an install method needs before it can run: `go` for gopls,
+/// `npm`/`pnpm` for the npm-installed servers, and so on.
+#[derive(Debug, Clone, PartialEq, Serialize, Type)]
+pub struct Prerequisite {
+    /// Executable the installer looks for (`go`, `npm`, `python3`, `dotnet`…).
+    /// The UI maps it to the settings page that chooses that toolchain.
+    pub command: String,
+    /// Short name for UI text: "Go", "Node.js", "Ruby" — not a whole sentence.
+    pub label: String,
+    pub url: Option<String>,
+}
+
 /// Streamed install progress.
 #[derive(Clone, Debug, Serialize, Type)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -578,7 +590,10 @@ impl Tools {
                 self.which_any(&["npm", "pnpm"]).is_some(),
                 "npm or pnpm is required: install Node.js (https://nodejs.org)",
             ),
-            Method::Go { .. } => need(self.which("go").is_some(), "Go is required (https://go.dev/dl)"),
+            Method::Go { .. } => need(
+                self.which("go").is_some(),
+                "gopls needs Go. Install Go from https://go.dev/dl, then set Settings › Languages & Frameworks › Go › GOROOT.",
+            ),
             Method::Gem { .. } => need(self.which("gem").is_some(), "Ruby is required (https://www.ruby-lang.org)"),
             Method::DotnetTool { .. } => {
                 need(self.which("dotnet").is_some(), ".NET SDK is required (https://dotnet.microsoft.com/download)")
