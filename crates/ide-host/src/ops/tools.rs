@@ -2,6 +2,7 @@
 use crate::Host;
 use crate::ops::Channel;
 use crate::rpc::Dispatcher;
+use std::collections::BTreeMap;
 
 use ide_core::{IdeError, IdeResult, RequestId};
 use ide_sdk::Sdk;
@@ -25,6 +26,18 @@ fn tools(host: &Host, window: &str) -> IdeResult<Tools> {
     // Godot is usually an app bundle / Flatpak outside the search path.
     let found = ide_sdk::godot::find(None).map(|p| (ide_sdk::godot::COMMAND.to_owned(), p));
     Ok(Tools::new(&data).with_custom_paths(custom).with_found_paths(found.into_iter().collect()))
+
+    // let mut found: BTreeMap<String, PathBuf> = BTreeMap::new();
+    // if let Some(p) = ide_sdk::godot::find(None) {
+    //     found.insert(ide_sdk::godot::COMMAND.to_owned(), p);
+    // }
+    // // Go SDK: Let the pre-check for `Method::Go` recognize it
+    // if let Some(bin) = ide_sdk::apply::go_bin_dir(&root, &settings) {
+    //     if let Some(go) = ide_core::tool_path::find_command("go", "", &bin) {
+    //         found.insert("go".to_owned(), go);
+    //     }
+    // }
+    // Ok(Tools::new(&data).with_custom_paths(custom).with_found_paths(found))
 }
 
 /// The language definitions plus the servers defined in the window's settings.

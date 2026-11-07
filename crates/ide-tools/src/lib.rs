@@ -71,6 +71,11 @@ pub struct ToolInfo {
     pub can_install: bool,
     /// Why install is impossible right now (missing npm, no build for this platform, …).
     pub unavailable_reason: Option<String>,
+    /// The missing toolchain, when that is the reason; `None` for other reasons
+    /// (no build for this platform, `curl` missing…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[specta(optional)]
+    pub missing_prerequisite: Option<Prerequisite>,
     pub can_uninstall: bool,
     /// Manual install instructions from the language definition.
     pub install_hint: Option<String>,
@@ -89,12 +94,14 @@ pub struct ToolInfo {
 // A toolchain an install method needs before it can run: `go` for gopls,
 /// `npm`/`pnpm` for the npm-installed servers, and so on.
 #[derive(Debug, Clone, PartialEq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct Prerequisite {
     /// Executable the installer looks for (`go`, `npm`, `python3`, `dotnet`…).
     /// The UI maps it to the settings page that chooses that toolchain.
     pub command: String,
     /// Short name for UI text: "Go", "Node.js", "Ruby" — not a whole sentence.
     pub label: String,
+    /// Where the user gets it.
     pub url: Option<String>,
 }
 
@@ -432,6 +439,14 @@ pub struct Tools {
     version_timeout: Duration,
 }
 
+/// Why an install method cannot run here.
+enum Missing {
+    /// A toolchain it needs, plus the sentence people see (keeps today's wording).
+    Toolchain(Prerequisite, String),
+    /// Anything else: no build for this platform, curl missing…
+    Unavailable(String),
+}
+
 impl Tools {
     /// Tools under `<app_data>/tools` using [`ide_core::tool_path::search_path`].
     pub fn new(app_data: &Path) -> Self {
@@ -581,41 +596,106 @@ impl Tools {
     }
 
     /// What the install method itself lacks (npm, a build for this platform, …).
-    fn method_missing(&self, method: Method) -> Option<String> {
-        let need = |ok: bool, msg: &str| (!ok).then(|| msg.to_string());
+    fn missing(&self, method: Method) -> Option<Missing> {
+        // Missing a toolchain: includes data required for the UI + user message
+        let toolchain = |ok: bool, cmd: &str, label: &str, url: &str, text: &str| {
+            (!ok).then(|| {
+                Missing::Toolchain(
+                    Prerequisite { command: cmd.to_string(), label: label.to_string(), url: Some(url.to_string()) },
+                    text.to_string(),
+                )
+            })
+        };
+        // Other causes (no platform build, missing curl): text only
+        let need = |ok: bool, msg: &str| (!ok).then(|| Missing::Unavailable(msg.to_string()));
+
         match method {
             Method::Bundled { .. } => None,
-            Method::Rustup { .. } => need(self.which("rustup").is_some(), "rustup is required (https://rustup.rs)"),
-            Method::Npm { .. } => need(
-                self.which_any(&["npm", "pnpm"]).is_some(),
+            Method::Rustup { .. } => toolchain(
+                self.resolve("rustup").is_some(),
+                "rustup",
+                "rustup",
+                "https://rustup.rs",
+                "rustup is required (https://rustup.rs)",
+            ),
+            Method::Npm { .. } => toolchain(
+                self.resolve_any(&["npm", "pnpm"]).is_some(),
+                "node",
+                "Node.js",
+                "https://nodejs.org",
                 "npm or pnpm is required: install Node.js (https://nodejs.org)",
             ),
-            Method::Go { .. } => need(
-                self.which("go").is_some(),
+            Method::Go { .. } => toolchain(
+                self.resolve("go").is_some(),
+                "go",
+                "Go",
+                "https://go.dev/dl/",
                 "gopls needs Go. Install Go from https://go.dev/dl, then set Settings › Languages & Frameworks › Go › GOROOT.",
             ),
-            Method::Gem { .. } => need(self.which("gem").is_some(), "Ruby is required (https://www.ruby-lang.org)"),
-            Method::DotnetTool { .. } => {
-                need(self.which("dotnet").is_some(), ".NET SDK is required (https://dotnet.microsoft.com/download)")
-            }
-            Method::PipVenv { .. } => need(
-                self.which("uv").is_some() || self.python().is_some(),
+            Method::Gem { .. } => toolchain(
+                self.which("gem").is_some(),
+                "ruby",
+                "Ruby",
+                "https://www.ruby-lang.org",
+                "Ruby is required (https://www.ruby-lang.org)",
+            ),
+            Method::DotnetTool { .. } => toolchain(
+                self.resolve("dotnet").is_some(),
+                "dotnet",
+                ".NET SDK",
+                "https://dotnet.microsoft.com/download",
+                ".NET SDK is required (https://dotnet.microsoft.com/download)",
+            ),
+            Method::PipVenv { .. } => toolchain(
+                self.resolve("uv").is_some() || self.python().is_some(),
+                "python",
+                "Python",
+                "https://www.python.org/downloads/",
                 "Python 3 or uv is required (https://www.python.org)",
             ),
-            Method::PipUser { .. } | Method::PipTarget { .. } => {
-                need(self.python().is_some(), "Python 3 is required (https://www.python.org)")
-            }
+            Method::PipUser { .. } | Method::PipTarget { .. } => toolchain(
+                self.python().is_some(),
+                "python",
+                "Python",
+                "https://www.python.org/downloads/",
+                "Python 3 is required (https://www.python.org)",
+            ),
             Method::Release { assets, .. } => {
                 let p = self.platform;
                 let has_rule = assets.iter().any(|r| {
                     r.os == p.os && (r.arch.is_none_or(|a| a == p.arch) || (p.os == Os::Mac && r.arch.is_some()))
                 });
                 if !has_rule {
-                    return Some(format!("No prebuilt release for {:?} {:?}", p.os, p.arch));
+                    Some(Missing::Unavailable(format!("No prebuilt release for {:?} {:?}", p.os, p.arch)))
+                } else {
+                    need(self.resolve("curl").is_some(), "curl is required to download tools")
                 }
-                need(self.which("curl").is_some(), "curl is required to download tools")
             }
         }
+    }
+
+    fn method_missing(&self, method: Method) -> Option<String> {
+        self.missing(method).map(|m| match m {
+            Missing::Toolchain(_, text) | Missing::Unavailable(text) => text,
+        })
+    }
+
+    /// The toolchain that is missing, when that is why the method cannot run.
+    fn missing_prerequisite(&self, method: Method) -> Option<Prerequisite> {
+        self.missing(method).and_then(|m| match m {
+            Missing::Toolchain(p, _) => Some(p),
+            Missing::Unavailable(_) => None,
+        })
+    }
+
+    /// An executable the install method needs: the search path, a location settings
+    /// report (the configured GOROOT's `bin`), or the path chosen for it in settings.
+    fn resolve(&self, cmd: &str) -> Option<PathBuf> {
+        self.which(cmd).or_else(|| self.found.get(cmd).cloned()).or_else(|| self.custom.get(cmd).cloned())
+    }
+
+    fn resolve_any(&self, cmds: &[&str]) -> Option<PathBuf> {
+        cmds.iter().find_map(|c| self.resolve(c))
     }
 
     fn info_for(&self, name: &str, usage: Option<&Usage>) -> Option<ToolInfo> {
@@ -638,6 +718,7 @@ impl Tools {
                 install_method: None,
                 can_install: false,
                 unavailable_reason: None,
+                missing_prerequisite: None,
                 can_uninstall: false,
                 install_hint,
                 homepage: None,
@@ -652,6 +733,7 @@ impl Tools {
         let unavailable_reason = self.unavailable_reason(spec);
         let bundled = matches!(spec.method, Method::Bundled { .. });
         let can_uninstall = status == ToolStatus::Installed && !bundled;
+        let missing_prerequisite = self.missing_prerequisite(self.install_method(spec));
         Some(ToolInfo {
             name: spec.name.to_string(),
             display_name: spec.display.to_string(),
@@ -664,6 +746,7 @@ impl Tools {
             install_method: Some(self.method_label(self.install_method(spec)).to_string()),
             can_install: unavailable_reason.is_none() && !bundled,
             unavailable_reason,
+            missing_prerequisite,
             can_uninstall,
             install_hint,
             homepage: Some(spec.homepage.to_string()),
