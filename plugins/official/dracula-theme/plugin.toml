@@ -1,0 +1,14 @@
+id = "openidea.dracula-theme"
+name = "Dracula Theme"
+version = "0.1.0"
+description = "A dark theme: Dracula's #282a36 surfaces, purple accent and pink/purple/cyan syntax palette."
+authors = ["aiv2008 aiv2005@github.com"]
+license = "MIT"                       # 确认上游 Dracula 的许可
+change-notes = "0.1.0 — first release: UI theme and editor colour scheme."
+engines.openidea = "^1.0"
+
+# One entry per theme. `editor-scheme` is optional: its tokens are merged over
+# the theme's (IntelliJ's .theme.json + .icls pair). Reference: plugins/themes.md.
+[[contributes.themes]]
+path = "themes/dracula-theme.theme.json"
+editor-scheme = "themes/dracula-theme.scheme.json"
